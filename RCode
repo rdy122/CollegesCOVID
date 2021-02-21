@@ -1,0 +1,141 @@
+
+library(dplyr)
+library(tidyr)
+library(readr)
+
+#College Info
+colleges_covid_cases <- read_csv("~/R...colleges.csv")
+
+colleges_covid_cases<-select(colleges_covid_cases, ipeds_id, college, cases, date, state, city, county)
+
+#COVID info for counties
+counties_covid_cases <- read_csv("~/R/...-covid.csv")
+counties_covid_cases <- select(counties_covid_cases, fips, county, state, cases, deaths)
+df1<-left_join(colleges_covid_cases, counties_covid_cases, by= c("county"="county", "state"="state"))
+
+#data cleaning after leftjoin resulted in 46 colleges with N/A covid values
+#remove cases from islands with very little covid info
+coll_cov_1<-colleges_covid_cases[(!(colleges_covid_cases$state=="Northern Mariana Islands") & !(colleges_covid_cases$state=="Puerto Rico") & !(colleges_covid_cases$state=="Virgin Islands") & !(colleges_covid_cases$state=="American Samoa") & !(colleges_covid_cases$state=="Guam") & !(colleges_covid_cases$state=="Marshall Islands")),]
+df2 <- left_join(coll_cov_1, counties_covid_cases, by= c("county"="county", "state"="state"))
+
+#rename cases columns to tell them apart
+df2<-df2 %>% rename(college_cases=cases.x, county_cases=cases.y)
+
+# New York, New York did not have any FIP listed:
+df2$fips[df2$county=="New York City"] <- 36061 
+
+#mask use
+masks <- read_csv("~/R...mask-use-by-county.csv")
+
+#rename columns so they are clearer
+masks<-masks %>% rename(never_masks = NEVER, rarely_masks = RARELY, sometimes_masks = SOMETIMES, frequently_masks = FREQUENTLY, always_masks = ALWAYS)
+
+#Had to convert to the same data type so I could join
+masks$COUNTYFP<-as.double(masks$COUNTYFP)
+df3 <- left_join(df2, masks, by = c("fips"="COUNTYFP"))
+df3<-df3 %>% rename(county_deaths=deaths)
+
+#State-level Data
+states_cases <- read_csv("~/R.../us-states.csv")
+states_cases <- states_cases %>% select(state, cases, deaths)
+states_cases <- states_cases %>% rename(state_cases=cases, state_deaths=deaths)
+df4 <- left_join(df3, states_cases, by = c("state"="state"))
+
+#College Details
+college_details <- read_csv("~/R...cc_institution_details.csv")
+college_details <- college_details %>% select(unitid, control, hbcu, long_x, lat_y, student_count, fte_value, med_sat_value, aid_value, endow_value)
+college_details <- college_details %>% rename(undergrad_count = student_count, ft_undergrad_count = fte_value, med_sat = med_sat_value, avg_aid_per_stud = aid_value, endow_per_ftstud = endow_value)
+df5 <- left_join(df4, college_details, by = c("ipeds_id"="unitid"))
+
+#noticed problem with endow_per_ftstud so checking data types
+str(df5)
+df5$med_sat<-as.numeric(df5$med_sat)
+df5$endow_per_ftstud<-as.numeric(df5$endow_per_ftstud)
+str(df5)
+
+#Admission Data
+adm2019 <- read_csv("~/R.../adm2019.csv")
+adm2019 <- adm2019 %>% select(UNITID, ACTCM25, ACTCM75)
+df6 <- left_join(df5, adm2019, by = c("ipeds_id"="UNITID"))
+df6 <- df6 %>% rename(act_25per = ACTCM25, act_75per = ACTCM75)
+
+#Governor Party Data
+governors <- read_csv("~/R...us-governors-party.csv")
+governors <- governors %>% select(state_name, party)
+governors <- governors %>% rename(governor_party = party)
+df7 <- left_join(df6, governors, by = c("state"="state_name"))
+
+#Population Data
+Population <- read_csv("~/R...PopulationEstimates.csv")
+population <- Population %>% select(FIPStxt, POP_ESTIMATE_2019)
+population <- population %>% rename(county_population = POP_ESTIMATE_2019)
+df8 <- left_join(df7, population, by = c("fips"="FIPStxt"))
+
+#Land Size Data
+Land <- read_excel("~/R.../LND01.xls")
+land <- Land %>% select(STCOU, LND110210D)
+land <- land %>% rename(county_land_sqmi = LND110210D)
+
+#need to make data type compatible in order to join
+land$STCOU<-as.numeric(land$STCOU)
+df9 <- left_join(df8, land, by = c("fips"="STCOU"))
+
+#add population density variable
+df9 <- df9 %>% mutate(county_popdensity = county_population/county_land_sqmi)
+
+#had to do the following work outside of this file:
+#president <- read_csv("~/R...president-wide-1.csv")
+##give fipscode proper number of digits so I will be able to join
+#president$fipscode <- substr(president$fipscode,1,5)
+#president[1:489,"fipscode"] <-substr(president[1:489,"fipscode"],1,4)
+
+#Presidential Election Data
+president <- read_csv("~/R.../president_revised.csv")
+president <- president %>% select(fipscode, dem.two.party)
+president <- president %>% group_by(fipscode) %>% summarize(dem_2party_share=mean(dem.two.party, na.rm=TRUE))
+
+#need to make data type compatible in order to join
+president$fipscode<-as.numeric(president$fipscode)
+df10 <- left_join(df9, president, by = c("fips"="fipscode"))
+
+#Income Data
+income <- read_csv("~/R...mrc_table2.csv")
+income <- income %>% select(name, par_mean, par_median)
+income <- income %>% rename(parent_income_mean= par_mean, parent_income_median = par_median)
+df10 <- df10 %>% mutate(college_lower = tolower(college))
+income <- income %>% mutate(name_lower = tolower(name))
+df11 <- left_join(df10, income, by = c("college_lower"="name_lower"))
+df11 <- subset(df11, select = -c(34,35))
+
+#Institution Enrollment Data
+institutions <- read_csv("~/R...institutions.csv")
+institutions <- institutions %>% select(UnitID, latitude, longitude, admit_rate, ugrad_enroll, native_amer_enroll, asian_enroll, black_enroll, hispanic_enroll, white_enroll)
+institutions <- institutions %>% summarize(UnitID, longitude,latitude, admit_rate, ugrad_enroll, native_amer_per = native_amer_enroll/ugrad_enroll, asian_per = asian_enroll/ugrad_enroll, black_per = black_enroll/ugrad_enroll, hispanic_per = hispanic_enroll/ugrad_enroll, white_per = white_enroll/ugrad_enroll)
+df12 <- left_join(df11, institutions, by = c("ipeds_id"="UnitID"))
+df12 <- subset(df12, select = -c(20, 21, 22, 23))
+
+#Tuition Data
+cost_attendance <- read_csv("~/R...cost-attendance.csv")
+cost_attendance <- cost_attendance %>% select(UnitID, instate_tuition, instate_tot_price, outofstate_tot_price)
+df13 <- left_join(df12, cost_attendance, by = c("ipeds_id"="UnitID"))
+
+#County Demographic Data
+county_demo <- read_csv("~/R...acs2017_county_data.csv")
+county_demo <- county_demo %>% select(CountyId, county_hisp_per = Hispanic, county_white_per = White, county_black_per = Black, county_native_per = Native, county_asian_per = Asian, county_household_income = Income, county_income_percap = IncomePerCap, county_poverty_per = Poverty, county_drive_per = Drive, county_transit_per = Transit, county_work_at_home_per = WorkAtHome)
+df14 <- left_join(df13, county_demo, by = c("fips"="CountyId"))
+
+summary(df14)
+df14 <- df14 %>% select(ipeds_id, college,  college_cases, cases_as_of = date, state, city, county, fips, college_control = control, ugrad_enroll, asian_per, black_per, native_amer_per,  hispanic_per, white_per, hbcu, instate_tuition, instate_tot_price, outofstate_tot_price, endow_per_ftstud, avg_aid_per_stud, admit_rate, med_sat, act_25per, act_75per, parent_income_mean, parent_income_median,state_cases, state_deaths, county_cases, county_deaths, never_masks, rarely_masks, sometimes_masks, frequently_masks, always_masks, dem_2party_share, governor_party, longitude, latitude, county_population, county_land_sqmi, county_popdensity, county_asian_per, county_black_per, county_hisp_per, county_native_per, county_white_per, county_household_income, county_income_percap, county_poverty_per, county_drive_per, county_transit_per, county_work_at_home_per)
+
+#Update with cases for end of 2020 fall semester
+colleges_covid_dec <- read_csv("~/R...colleges_covid_dec.csv")
+colleges_covid_dec<-select(colleges_covid_dec, ipeds_id, cases)
+
+df15<-left_join(df14, colleges_covid_dec, by= c("ipeds_id"="ipeds_id"))
+df15 <- df15 %>% rename(college_cases_102220 = college_cases, college_cases_121120 = cases)
+
+#Linear Regression Analysis
+lm1 <- lm(college_cases_121120 ~ . - college -city -state -county -ipeds_id -fips -college_cases_102220, data=df15)
+summary(lm1)
+lm2 <- lm(college_cases_121120 ~ .-ipeds_id -fips -college_cases_102220, data=df15)
+summary(lm2)
