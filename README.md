@@ -1,5 +1,6 @@
 # CollegesCOVID
-Sources:
+SOURCES:
+
   https://github.com/nytimes/covid-19-data; Based on reports from state and local health agencies.
 
   https://data.world/databeats/college-completion; Data originally came from The Chronicle of Higher Education. (This table provided no data for 149 of the 1765 colleges, mostly ones without undergrads.)
